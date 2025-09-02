@@ -1,0 +1,12 @@
+{
+  "as_of_trading_day": "1970-01-01",
+  "close": 0,
+  "ma20": 0,
+  "ma50": 0,
+  "atr14": 0,
+  "rsi14": 0,
+  "regime": "Repair",
+  "yday_rule": "Init",
+  "yday_decision": "WAIT",
+  "rule_version": "v1.0"
+}
