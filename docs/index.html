@@ -1,4 +1,201 @@
 <!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Gold Decision</title>
-<h1>Gold Decision UI</h1>
-<p>Baseline and decision interface coming soon…</p>
+<style>
+  :root { --ok:#0a7a2f; --warn:#b76e00; --bad:#b00020; --muted:#6b7280; }
+  body { font-family: system-ui, Arial, sans-serif; margin: 24px; line-height: 1.4; }
+  h1 { margin: 0 0 12px 0; }
+  .card { border:1px solid #e5e7eb; border-radius:12px; padding:16px; max-width: 760px; }
+  .row { margin: 8px 0; display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+  label { min-width: 220px; }
+  input { padding:8px; border:1px solid #cbd5e1; border-radius:8px; width: 160px; }
+  button { padding:8px 12px; border-radius:8px; border:1px solid #cbd5e1; background:#f8fafc; cursor:pointer; }
+  button:hover { background:#eef2f7; }
+  .muted { color: var(--muted); }
+  .pill { display:inline-block; padding:4px 8px; border-radius:999px; font-weight:600; }
+  .pill.buy { background: #e7f6ec; color: var(--ok); border:1px solid #bfe6cc; }
+  .pill.wait { background: #fff4e6; color: var(--warn); border:1px solid #ffe0b3; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #eee; }
+  .hint { font-size: 0.92rem; color:#374151; }
+</style>
+</head>
+<body>
+  <h1>Gold Decision</h1>
+  <div class="card">
+    <div id="baseline" class="row">Loading baseline…</div>
+
+    <div class="row">
+      <label>Live price (USD/oz):
+        <input id="livePrice" type="number" step="0.01" placeholder="e.g. 3447.5" />
+      </label>
+      <label>Live RSI(14) (daily, Wilder):
+        <input id="liveRsi" type="number" step="0.1" placeholder="e.g. 48.7" />
+      </label>
+      <div>
+        <button id="decideBtn">Decide</button>
+        <button id="resetBtn">Reset</button>
+        <button id="copyBtn" title="Copy summary">Copy</button>
+      </div>
+    </div>
+
+    <div id="result" class="row muted">Enter live price and RSI, then click “Decide”.</div>
+
+    <div id="details" style="display:none">
+      <table>
+        <tbody class="mono">
+          <tr><th>Regime</th><td id="d_regime"></td></tr>
+          <tr><th>As of (baseline)</th><td id="d_asof"></td></tr>
+          <tr><th>Close</th><td id="d_close"></td></tr>
+          <tr><th>MA20</th><td id="d_ma20"></td></tr>
+          <tr><th>MA50</th><td id="d_ma50"></td></tr>
+          <tr><th>ATR14</th><td id="d_atr"></td></tr>
+          <tr><th>RSI14 (yesterday)</th><td id="d_rsi_y"></td></tr>
+          <tr><th>Live price</th><td id="d_livep"></td></tr>
+          <tr><th>Live RSI14</th><td id="d_liversi"></td></tr>
+          <tr><th>z20 = (MA20 - P)/ATR</th><td id="d_z20"></td></tr>
+          <tr><th>z50 = (MA50 - P)/ATR</th><td id="d_z50"></td></tr>
+          <tr><th>Rule</th><td id="d_rule"></td></tr>
+          <tr><th>Reason</th><td id="d_reason"></td></tr>
+        </tbody>
+      </table>
+      <p class="hint">
+        Notes: We use <strong>yesterday’s</strong> MA/ATR/RSI from <code>latest.json</code>.
+        In <em>Uptrend</em>, buy dips to/under MA20 within ≤1×ATR; deeper dips → wait for stabilization.
+        In <em>Repair</em>, buy only if price ≤ MA50, RSI &lt; 50, and within ≤0.75×ATR of MA50.
+      </p>
+    </div>
+  </div>
+
+<script>
+let BASELINE = null;
+
+async function loadBaseline() {
+  try {
+    const res = await fetch('./latest.json', { cache: 'no-store' });
+    const j = await res.json();
+    BASELINE = j;
+
+    const fmt = (n, d=2) => (n==null ? "n/a" : Number(n).toFixed(d));
+    const html = `
+      <div>
+        <div><strong>Baseline</strong> (as of <span class="mono">${j.as_of_trading_day}</span>,
+          updated <span class="mono">${j.last_updated_utc || 'n/a'}</span>)</div>
+        <div class="mono">
+          Close=${fmt(j.close,3)} | MA20=${fmt(j.ma20,4)} | MA50=${fmt(j.ma50,4)} |
+          ATR14=${fmt(j.atr14,4)} | RSI14=${fmt(j.rsi14,1)} | Regime=${j.regime}
+        </div>
+      </div>`;
+    document.getElementById('baseline').innerHTML = html;
+  } catch (e) {
+    document.getElementById('baseline').textContent = 'latest.json not found yet (run updater).';
+  }
+}
+
+function decide() {
+  const p = parseFloat(document.getElementById('livePrice').value);
+  const r = parseFloat(document.getElementById('liveRsi').value);
+  if (!BASELINE) { return showResult('Load baseline first.', 'wait'); }
+  if (!isFinite(p) || !isFinite(r)) { return showResult('Enter valid live price and RSI.', 'wait'); }
+
+  const close = +BASELINE.close;
+  const ma20  = +BASELINE.ma20;
+  const ma50  = +BASELINE.ma50;
+  const atr   = +BASELINE.atr14;
+  const rsi_y = +BASELINE.rsi14;
+  const regime = BASELINE.regime || (ma20 > ma50 ? 'Uptrend' : 'Repair');
+
+  // distances in ATR units
+  const z20 = (ma20 - p) / atr;   // positive => below MA20
+  const z50 = (ma50 - p) / atr;   // positive => below MA50
+
+  let decision = 'WAIT', rule='None', reason='No rule matched';
+
+  if (regime === 'Uptrend') {
+    if (p <= ma20 && z20 <= 1.0) {
+      decision = 'BUY 1 tranche ($500)';
+      rule = 'B';
+      reason = 'Uptrend: price ≤ MA20 and within 1×ATR';
+    } else if (p <= ma20 && z20 > 1.0) {
+      decision = 'WAIT';
+      rule = 'B*';
+      reason = 'Uptrend: dip > 1×ATR below MA20 (stretched) — wait for stabilization';
+    } else {
+      decision = 'WAIT';
+      rule = 'B0';
+      reason = 'Uptrend: price above MA20 — wait for pullback';
+    }
+  } else { // Repair
+    if (p <= ma50 && r < 50 && z50 <= 0.75) {
+      decision = 'BUY 1 tranche ($500)';
+      rule = 'A';
+      reason = 'Repair: price ≤ MA50, RSI<50, within 0.75×ATR';
+    } else if (p <= ma50 && r < 50 && z50 > 0.75) {
+      decision = 'WAIT';
+      rule = 'A*';
+      reason = 'Repair: far below MA50 (>0.75×ATR) — wait for stabilization';
+    } else {
+      decision = 'WAIT';
+      rule = 'A0';
+      reason = 'Repair: need price ≤ MA50 and RSI<50 (and not far below)';
+    }
+  }
+
+  showResult(decision, decision.startsWith('BUY') ? 'buy' : 'wait');
+
+  // fill details
+  const f2 = x => (x==null ? 'n/a' : Number(x).toFixed(2));
+  const f3 = x => (x==null ? 'n/a' : Number(x).toFixed(3));
+  document.getElementById('details').style.display = 'block';
+  document.getElementById('d_regime').textContent = regime;
+  document.getElementById('d_asof').textContent = BASELINE.as_of_trading_day;
+  document.getElementById('d_close').textContent = f3(close);
+  document.getElementById('d_ma20').textContent  = f3(ma20);
+  document.getElementById('d_ma50').textContent  = f3(ma50);
+  document.getElementById('d_atr').textContent   = f3(atr);
+  document.getElementById('d_rsi_y').textContent = f2(rsi_y);
+  document.getElementById('d_livep').textContent = f3(p);
+  document.getElementById('d_liversi').textContent = f2(r);
+  document.getElementById('d_z20').textContent   = f3(z20);
+  document.getElementById('d_z50').textContent   = f3(z50);
+  document.getElementById('d_rule').textContent  = rule;
+  document.getElementById('d_reason').textContent= reason;
+
+  // copy summary payload to clipboard on demand
+  window._lastSummary = {
+    timestamp_local: new Date().toISOString(),
+    baseline_asof: BASELINE.as_of_trading_day,
+    regime, close, ma20, ma50, atr14: atr, rsi14_yesterday: rsi_y,
+    live_price: p, live_RSI14: r, z20, z50, rule, decision, reason
+  };
+}
+
+function showResult(text, level='wait') {
+  const el = document.getElementById('result');
+  el.innerHTML = `<span class="pill ${level}">${text}</span>`;
+}
+
+document.getElementById('decideBtn').onclick = decide;
+document.getElementById('resetBtn').onclick = () => {
+  document.getElementById('livePrice').value = '';
+  document.getElementById('liveRsi').value = '';
+  document.getElementById('result').textContent = 'Enter live price and RSI, then click “Decide”.';
+  document.getElementById('details').style.display = 'none';
+};
+document.getElementById('copyBtn').onclick = async () => {
+  try {
+    if (!window._lastSummary) return;
+    const txt = JSON.stringify(window._lastSummary, null, 2);
+    await navigator.clipboard.writeText(txt);
+    showResult('Summary copied to clipboard ✔', 'buy');
+  } catch { showResult('Could not copy (browser permissions).', 'wait'); }
+};
+
+loadBaseline();
+</script>
+</body>
+</html>
