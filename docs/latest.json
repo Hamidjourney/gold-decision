@@ -1,12 +1,15 @@
 {
-  "as_of_trading_day": "1970-01-01",
-  "close": 0,
-  "ma20": 0,
-  "ma50": 0,
-  "atr14": 0,
-  "rsi14": 0,
-  "regime": "Repair",
-  "yday_rule": "Init",
+  "as_of_trading_day": "2025-09-02",
+  "last_updated_utc": "2025-09-02T11:44:59Z",
+  "close": 3484.215,
+  "ma20": 3379.1785,
+  "ma50": 3355.0732,
+  "atr14": 39.5674,
+  "rsi14": 69.5563,
+  "regime": "Uptrend",
+  "yday_rule": "B0",
   "yday_decision": "WAIT",
-  "rule_version": "v1.0"
+  "rule_version": "v1.1",
+  "symbol": "XAUUSD",
+  "units": "USD_per_oz"
 }
