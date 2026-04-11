@@ -17,7 +17,7 @@ import numpy as np
 REPO_ROOT     = Path(__file__).resolve().parents[1]
 DATA_CSV      = REPO_ROOT / "data" / "Goldhist.csv"
 LATEST_JSON   = REPO_ROOT / "docs" / "latest.json"
-STOOQ_URL     = "https://stooq.com/q/d/l/?s=xauusd&i=d"
+STOOQ_FULL_URL = "https://stooq.com/q/d/l/?s=xauusd&i=d"
 
 TRANCHE_USD   = 500
 RULE_VERSION  = "v1.1"
@@ -109,12 +109,31 @@ def load_goldhist(path: Path) -> pd.DataFrame:
     return df
 
 def fetch_stooq() -> pd.DataFrame:
-    df = pd.read_csv(STOOQ_URL, sep=None, engine="python", parse_dates=["Date"], dayfirst=False)
+    # determine start date
+    if DATA_CSV.exists() and DATA_CSV.stat().st_size > 0:
+        last_df = pd.read_csv(DATA_CSV, parse_dates=["Date"])
+        last_date = last_df["Date"].max()
+        start = (last_date + pd.Timedelta(days=1)).strftime("%Y%m%d")
+    else:
+        start = "20000101"  # fallback for first run
+
+    # today (UTC)
+    end = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+    url = f"https://stooq.com/q/d/l/?s=xauusd&f={start}&t={end}&i=d"
+    print(f"Fetching: {url}")
+
+    df = pd.read_csv(url, parse_dates=["Date"])
     df = df.rename(columns=str.title)
+
     for c in ["Open","High","Low","Close"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
+
     df = df.sort_values("Date").set_index("Date").dropna(subset=["Close"])
-    df = prune_today_rows(df)  # drop today's partial bar
+    df = prune_today_rows(df)
+
+    print(f"Fetched rows: {df.index.min()} → {df.index.max()}")
+
     return df[["Open","High","Low","Close"]]
 
 def write_latest_json(df_full: pd.DataFrame) -> None:
